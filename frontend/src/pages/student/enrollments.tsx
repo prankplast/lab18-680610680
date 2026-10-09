@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { PlusCircle } from "lucide-react";
+import { PlusCircle, ArrowRightLeft, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -32,12 +32,20 @@ import { useEnrollmentStore } from "@/lib/enrollment-store";
 
 export default function StudentEnrollmentsPage() {
   const studentId = useAuthStore((s) => s.studentId);
-  const { students, courses, enrollments, enroll } = useEnrollmentStore();
+  const { students, courses, enrollments, enroll, updateEnrollment, dropEnrollment} = useEnrollmentStore();
 
   const [open, setOpen] = useState(false);
   const [formCourse, setFormCourse] = useState<string | null>(null);
   const [serverError, setServerError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
+  const [newCourseId, setNewCourseId] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [dropError, setDropError] = useState<string | null>(null);
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [droppingCourseId, setDroppingCourseId] = useState<string | null>(null);
+
 
   const me = students.find((s) => s.studentId === studentId);
   const myEnrollments = enrollments.filter((e) => e.studentId === studentId);
@@ -51,6 +59,61 @@ export default function StudentEnrollmentsPage() {
 
   const courseOf = (courseId: string) =>
     courses.find((c) => c.courseId === courseId);
+
+  
+  const availableCourses = courses
+    .filter((c) => !myEnrollments.some((e) => e.courseId === c.courseId))
+    .map((c) => ({
+      value: c.courseId,
+      label: `${c.courseId} — ${c.courseTitle}`,
+    }));
+
+  const handleEditOpen = (courseId: string) => {
+    setEditingCourseId(courseId);
+    setNewCourseId(null);
+    setEditError(null);
+    setEditOpen(true);
+  };
+
+  const handleEditOpenChange = (next: boolean) => {
+    setEditOpen(next);
+    if (!next) {
+      setEditingCourseId(null);
+      setNewCourseId(null);
+      setEditError(null);
+    }
+  };
+
+  const handleUpdateEnrollment = async () => {
+    if (!studentId || !editingCourseId || !newCourseId) return;
+
+    setEditSubmitting(true);
+    setEditError(null);
+
+    try {
+      await updateEnrollment(studentId, editingCourseId, newCourseId);
+      handleEditOpenChange(false);
+    } catch (err) {
+      setEditError((err as Error).message);
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
+
+  const handleDropEnrollment = async (courseId: string) => {
+    if (!studentId) return;
+
+    setDroppingCourseId(courseId);
+    setDropError(null);
+
+    try {
+      await dropEnrollment(studentId, courseId);
+    } catch (err) {
+      setDropError((err as Error).message);
+    } finally {
+      setDroppingCourseId(null);
+    }
+  };
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
@@ -138,9 +201,67 @@ export default function StudentEnrollmentsPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        
+        <Dialog open={editOpen} onOpenChange={handleEditOpenChange}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>เปลี่ยนวิชาที่ลงทะเบียน</DialogTitle>
+              <DialogDescription>
+                วิชาเดิม: {editingCourseId ?? "-"} — เลือกวิชาใหม่ที่ยังไม่ได้ลงทะเบียน
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="grid gap-1.5">
+              <Label htmlFor="newCourseId">วิชาใหม่</Label>
+              <Select
+                items={availableCourses}
+                value={newCourseId}
+                onValueChange={(v) => setNewCourseId(v as string)}
+              >
+                <SelectTrigger id="newCourseId" className="w-full">
+                  <SelectValue placeholder="เลือกวิชาใหม่" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableCourses.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {editError && (
+              <p className="text-sm text-destructive">{editError}</p>
+            )}
+
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => handleEditOpenChange(false)}
+                disabled={editSubmitting}
+              >
+                ยกเลิก
+              </Button>
+              <Button
+                disabled={!newCourseId || editSubmitting}
+                onClick={handleUpdateEnrollment}
+              >
+                {editSubmitting ? "กำลังบันทึก..." : "บันทึก"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
 
       <div className="rounded-lg border">
+        {dropError && (
+          <p className="text-sm text-destructive" role="alert">
+            {dropError}
+          </p>
+        )}
+
         <Table>
           <TableHeader>
             <TableRow>
@@ -148,13 +269,15 @@ export default function StudentEnrollmentsPage() {
               <TableHead>ชื่อวิชา</TableHead>
               <TableHead>ผู้สอน</TableHead>
               <TableHead>วันที่ลงทะเบียน</TableHead>
+              <TableHead>Action</TableHead>
             </TableRow>
           </TableHeader>
+
           <TableBody>
             {myEnrollments.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={4}
+                  colSpan={5}
                   className="h-20 text-center text-muted-foreground"
                 >
                   ยังไม่ได้ลงทะเบียนวิชาใด
@@ -172,6 +295,27 @@ export default function StudentEnrollmentsPage() {
                     {e.enrolledAt
                       ? new Date(e.enrolledAt).toLocaleString("th-TH")
                       : "-"}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`เปลี่ยนวิชา ${e.courseId}`}
+                        title="เปลี่ยนวิชา"
+                        onClick={() => handleEditOpen(e.courseId)}
+                        disabled={droppingCourseId !== null}
+                      >
+                        <ArrowRightLeft className="h-4 w-4" />
+                      </Button>
+
+                      <Button
+                        onClick={() => handleDropEnrollment(e.courseId)}
+                        disabled={droppingCourseId !== null}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               );
